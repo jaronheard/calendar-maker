@@ -1,86 +1,89 @@
-import { NextResponse } from "next/server"
-import { generateText } from "ai"
-import { openai } from "@ai-sdk/openai"
+import { NextResponse } from "next/server";
+import { generateObject } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { z } from "zod";
 
 // Set a longer timeout for the OpenAI API call
-export const maxDuration = 60 // This extends the function timeout to 60 seconds
+export const maxDuration = 60; // This extends the function timeout to 60 seconds
+
+// Define the Zod schema for an event
+const EventSchema = z.object({
+  title: z.string().min(1, "Title is required"),
+  day: z.string().min(1, "Day is required"),
+  startTime: z
+    .string()
+    .regex(
+      /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/,
+      "Start time must be in 24-hour format (HH:MM)"
+    ),
+  endTime: z
+    .string()
+    .regex(
+      /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/,
+      "End time must be in 24-hour format (HH:MM)"
+    ),
+  description: z.string().optional(),
+});
+
+// Define the array schema
+const EventsArraySchema = z.array(EventSchema);
 
 export async function POST(req: Request) {
   try {
-    const { text } = await req.json()
+    const { text } = await req.json();
 
     if (!text) {
-      return NextResponse.json({ error: "Text input is required" }, { status: 400 })
+      return NextResponse.json(
+        { error: "Text input is required" },
+        { status: 400 }
+      );
     }
 
     const prompt = `
-      Parse the following text into structured weekly recurring events.
-      For each event, extract:
-      1. Title of the event
-      2. Day of the week
-      3. Start time (in 24-hour format HH:MM)
-      4. End time (in 24-hour format HH:MM)
-      5. Description (if available)
-
-      If a specific date is mentioned instead of a day, convert it to a day of the week.
-      If only a start time is mentioned with a duration, calculate the end time.
+      Extract weekly recurring events from the following text.
       
-      Format the response as a JSON array of events with the following structure:
-      [
-        {
-          "title": "Event title",
-          "day": "Monday", // or YYYY-MM-DD format if a specific date is given
-          "startTime": "09:00",
-          "endTime": "10:00",
-          "description": "Optional description"
-        }
-      ]
-
+      For each event:
+      - Title should be descriptive and clear
+      - Day should be a weekday name (e.g., "Monday") or in YYYY-MM-DD format for specific dates
+      - Times must be in 24-hour format (HH:MM)
+      - If only a start time with duration is mentioned, calculate the end time
+      - Include any description if available
+      
       Input text:
       ${text}
-    `
+    `;
 
     try {
-      const { text: responseText } = await generateText({
-        model: openai("o3-mini"), // Using o3-mini model for better performance
+      // Using generateObject with our EventsArraySchema directly
+      const { object: events } = await generateObject({
+        model: openai("o3-mini", {
+          structuredOutputs: true, // Enable structured outputs for the model
+        }),
         prompt,
+        schema: EventsArraySchema,
         temperature: 0.2, // Lower temperature for more consistent results
         maxTokens: 1500, // Limit response size
-      })
+      });
 
-      // Extract the JSON array from the response
-      let events = []
-      try {
-        // Find JSON in the response (it might be wrapped in markdown code blocks)
-        const jsonMatch = responseText.match(/\[[\s\S]*\]/)
-        if (jsonMatch) {
-          events = JSON.parse(jsonMatch[0])
-        } else {
-          events = JSON.parse(responseText)
-        }
-      } catch (error) {
-        console.error("Error parsing JSON from AI response:", error)
-        console.error("Raw response:", responseText)
-        return NextResponse.json(
-          { error: "Failed to parse events from the input", details: responseText },
-          { status: 500 },
-        )
-      }
-
-      return NextResponse.json({ events })
-    } catch (error) {
-      console.error("OpenAI API error:", error)
+      return NextResponse.json({ events });
+    } catch (error: unknown) {
+      console.error("OpenAI API error:", error);
       return NextResponse.json(
-        { error: "Error communicating with AI service", details: error.message },
-        { status: 500 },
-      )
+        {
+          error: "Error communicating with AI service",
+          details: error instanceof Error ? error.message : String(error),
+        },
+        { status: 500 }
+      );
     }
-  } catch (error) {
-    console.error("Error processing request:", error)
+  } catch (error: unknown) {
+    console.error("Error processing request:", error);
     return NextResponse.json(
-      { error: "An error occurred while processing your request", details: error.message },
-      { status: 500 },
-    )
+      {
+        error: "An error occurred while processing your request",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
   }
 }
-
